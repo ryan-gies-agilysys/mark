@@ -60,3 +60,71 @@ func TestSetTitleFromFilename(t *testing.T) {
 		assert.Equal(t, "Already Title Cased", meta.Title)
 	})
 }
+
+func TestExtractMeta_YAML_Complex(t *testing.T) {
+	data := []byte(`---
+Confluence:
+  Space: VICTRIAL
+  Label:
+    - Label1
+    - Label2
+  Attachment: single.png
+  Parent: [Parent1, Parent2]
+Other: ignore
+---
+Content`)
+
+	meta, content, err := ExtractMeta(data, "", false, false, "", nil, false)
+	assert.NoError(t, err)
+	assert.NotNil(t, meta)
+	assert.Equal(t, "VICTRIAL", meta.Space)
+	assert.Equal(t, []string{"Label1", "Label2"}, meta.Labels)
+	assert.Equal(t, []string{"single.png"}, meta.Attachments)
+	assert.Equal(t, []string{"Parent1", "Parent2"}, meta.Parents)
+	assert.Equal(t, []byte("Content"), content)
+}
+
+func TestExtractMeta_HTML_Complex(t *testing.T) {
+	data := []byte(`<!-- Space: VICTRIAL -->
+<!-- Label: Label1 -->
+<!-- Label: Label2 -->
+<!-- Attachment: single.png -->
+<!-- Parent: Parent1 -->
+<!-- Parent: Parent2 -->
+Content`)
+
+	meta, content, err := ExtractMeta(data, "", false, false, "", nil, false)
+	assert.NoError(t, err)
+	assert.NotNil(t, meta)
+	assert.Equal(t, "VICTRIAL", meta.Space)
+	assert.Equal(t, []string{"Label1", "Label2"}, meta.Labels)
+	assert.Equal(t, []string{"single.png"}, meta.Attachments)
+	assert.Equal(t, []string{"Parent1", "Parent2"}, meta.Parents)
+	assert.Equal(t, []byte("Content"), content)
+}
+
+func TestExtractMeta_Macro(t *testing.T) {
+	data := []byte(`<!-- Space: VICTRIAL -->
+<!-- Macro: test -->
+Content`)
+
+	meta, content, err := ExtractMeta(data, "", false, false, "", nil, false)
+	assert.NoError(t, err)
+	assert.NotNil(t, meta)
+	assert.Equal(t, "VICTRIAL", meta.Space)
+	// Macro should be part of the content
+	assert.Equal(t, []byte("<!-- Macro: test -->\nContent"), content)
+}
+
+func TestExtractMeta_ContentAppearance(t *testing.T) {
+	data := []byte(`---
+Confluence:
+  content-appearance: fixed
+---
+Content`)
+
+	meta, _, err := ExtractMeta(data, "", false, false, "", nil, false)
+	assert.NoError(t, err)
+	assert.NotNil(t, meta)
+	assert.Equal(t, FixedContentAppearance, meta.ContentAppearance)
+}

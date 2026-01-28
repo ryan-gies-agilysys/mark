@@ -12,6 +12,7 @@ import (
 	"github.com/reconquest/pkg/log"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -49,7 +50,67 @@ const (
 var (
 	reHeaderPatternV2    = regexp.MustCompile(`<!--\s*([^:]+):\s*(.*)\s*-->`)
 	reHeaderPatternMacro = regexp.MustCompile(`<!-- Macro: .*`)
+	reYAMLFrontmatter    = regexp.MustCompile(`(?s)^---\r?\n(.*?)\r?\n---\r?\n?`)
 )
+
+func (meta *Meta) setHeader(key string, value interface{}) {
+	if values, ok := value.([]interface{}); ok {
+		for _, v := range values {
+			meta.setHeader(key, v)
+		}
+		return
+	}
+
+	header := cases.Title(language.English).String(key)
+	sValue := strings.TrimSpace(fmt.Sprint(value))
+
+	switch header {
+	case HeaderParent:
+		meta.Parents = append(meta.Parents, sValue)
+
+	case HeaderSpace:
+		meta.Space = sValue
+
+	case HeaderType:
+		meta.Type = sValue
+
+	case HeaderTitle:
+		meta.Title = sValue
+
+	case HeaderLayout:
+		meta.Layout = sValue
+
+	case HeaderSidebar:
+		meta.Layout = "article"
+		meta.Sidebar = sValue
+
+	case HeaderEmoji:
+		meta.Emoji = sValue
+
+	case HeaderAttachment:
+		meta.Attachments = append(meta.Attachments, sValue)
+
+	case HeaderLabel:
+		meta.Labels = append(meta.Labels, sValue)
+
+	case HeaderInclude:
+		// Includes are parsed by a different func
+
+	case ContentAppearance:
+		if sValue == FixedContentAppearance {
+			meta.ContentAppearance = FixedContentAppearance
+		} else {
+			meta.ContentAppearance = FullWidthContentAppearance
+		}
+
+	default:
+		log.Errorf(
+			nil,
+			`encountered unknown header %q`,
+			header,
+		)
+	}
+}
 
 func ExtractMeta(data []byte, spaceFromCli string, titleFromH1 bool, titleFromFilename bool, filename string, parents []string, titleAppendGeneratedHash bool) (*Meta, []byte, error) {
 	var (
@@ -57,25 +118,14 @@ func ExtractMeta(data []byte, spaceFromCli string, titleFromH1 bool, titleFromFi
 		offset int
 	)
 
-	scanner := bufio.NewScanner(bytes.NewBuffer(data))
-	for scanner.Scan() {
-		line := scanner.Text()
+	if match := reYAMLFrontmatter.FindSubmatchIndex(data); match != nil {
+		yamlData := data[match[2]:match[3]]
+		offset = match[1]
 
-		if err := scanner.Err(); err != nil {
+		var raw map[string]interface{}
+		err := yaml.Unmarshal(yamlData, &raw)
+		if err != nil {
 			return nil, nil, err
-		}
-
-		offset += len(line) + 1
-
-		matches := reHeaderPatternV2.FindStringSubmatch(line)
-		if matches == nil {
-			matches = reHeaderPatternMacro.FindStringSubmatch(line)
-			// If we have a match, then we started reading a macro.
-			// We want to keep it in the document for it to be read by ExtractMacros
-			if matches != nil {
-				offset -= len(line) + 1
-			}
-			break
 		}
 
 		if meta == nil {
@@ -84,62 +134,46 @@ func ExtractMeta(data []byte, spaceFromCli string, titleFromH1 bool, titleFromFi
 			meta.ContentAppearance = FullWidthContentAppearance // Default to full-width for backwards compatibility
 		}
 
-		header := cases.Title(language.English).String(matches[1])
-
-		var value string
-		if len(matches) > 1 {
-			value = strings.TrimSpace(matches[2])
+		// YAML map keys are not guaranteed to be in order, but for these headers it doesn't matter much
+		// except for Parents/Labels/Attachments which we append.
+		topLevel := "Confluence"
+		for k, v := range raw {
+			if strings.EqualFold(k, topLevel) {
+				if confluence, ok := v.(map[string]interface{}); ok {
+					for ck, cv := range confluence {
+						meta.setHeader(ck, cv)
+					}
+				}
+				break
+			}
 		}
+	} else {
+		scanner := bufio.NewScanner(bytes.NewBuffer(data))
+		for scanner.Scan() {
+			line := scanner.Text()
 
-		switch header {
-		case HeaderParent:
-			meta.Parents = append(meta.Parents, value)
-
-		case HeaderSpace:
-			meta.Space = strings.TrimSpace(value)
-
-		case HeaderType:
-			meta.Type = strings.TrimSpace(value)
-
-		case HeaderTitle:
-			meta.Title = strings.TrimSpace(value)
-
-		case HeaderLayout:
-			meta.Layout = strings.TrimSpace(value)
-
-		case HeaderSidebar:
-			meta.Layout = "article"
-			meta.Sidebar = strings.TrimSpace(value)
-
-		case HeaderEmoji:
-			meta.Emoji = strings.TrimSpace(value)
-
-		case HeaderAttachment:
-			meta.Attachments = append(meta.Attachments, value)
-
-		case HeaderLabel:
-			meta.Labels = append(meta.Labels, value)
-
-		case HeaderInclude:
-			// Includes are parsed by a different func
-			continue
-
-		case ContentAppearance:
-			if strings.TrimSpace(value) == FixedContentAppearance {
-				meta.ContentAppearance = FixedContentAppearance
-			} else {
-				meta.ContentAppearance = FullWidthContentAppearance
+			if err := scanner.Err(); err != nil {
+				return nil, nil, err
 			}
 
-		default:
-			log.Errorf(
-				nil,
-				`encountered unknown header %q line: %#v`,
-				header,
-				line,
-			)
+			if reHeaderPatternMacro.MatchString(line) {
+				break
+			}
 
-			continue
+			matches := reHeaderPatternV2.FindStringSubmatch(line)
+			if matches == nil {
+				break
+			}
+
+			offset += len(line) + 1
+
+			if meta == nil {
+				meta = &Meta{}
+				meta.Type = "page"                                  // Default if not specified
+				meta.ContentAppearance = FullWidthContentAppearance // Default to full-width for backwards compatibility
+			}
+
+			meta.setHeader(matches[1], matches[2])
 		}
 	}
 
