@@ -202,22 +202,40 @@ func parseLinks(markdown string) []markdownLink {
 	return links
 }
 
-// getConfluenceLink builds a stable Confluence tiny link for the given page.
+// getConfluenceLink builds a stable Confluence tiny link for the given page or blog post.
 // Tiny links use the format {baseURL}/x/{encodedPageID} and are immune to
 // Cloud-specific URL variations like /ex/confluence/<cloudId>/wiki/...
 func getConfluenceLink(
 	api *confluence.API,
 	space, title string,
 ) (string, error) {
+	// Try to find as a page first
 	page, err := api.FindPage(space, title, "page")
 	if err != nil {
 		return "", karma.Format(err, "api: find page")
 	}
+
+	// If not found as a page, try to find as a blog post
+	if page == nil {
+		page, err = api.FindPage(space, title, "blogpost")
+		if err != nil {
+			return "", karma.Format(err, "api: find blogpost")
+		}
+	}
+
 	if page == nil {
 		return "", nil
 	}
 
-	tiny, err := GenerateTinyLink(api.BaseURL, page.ID)
+	// Prefer the base URL from the API response (_links.base) as it contains
+	// the canonical user-facing wiki URL (e.g., https://tenant.atlassian.net/wiki).
+	// Fall back to api.BaseURL if _links.base is not available.
+	baseURL := page.Links.Base
+	if baseURL == "" {
+		baseURL = api.BaseURL
+	}
+
+	tiny, err := GenerateTinyLink(baseURL, page.ID)
 	if err != nil {
 		return "", karma.Format(err, "generate tiny link for page %s", page.ID)
 	}
